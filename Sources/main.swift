@@ -13,6 +13,7 @@ final class MaskView: NSView {
     var onToggleLogin: ((Bool) -> Void)?
     var onToggleContinuous: ((Bool) -> Void)?
     var onTogglePause: ((Bool) -> Void)?
+    var onRead: (() -> Void)?
     var launchAtLogin = false
     var continuous = true
     var paused = false
@@ -196,6 +197,7 @@ final class MaskView: NSView {
         let menu = NSMenu()
         menu.addItem(withTitle: "Abrir Harness", action: #selector(openAction), keyEquivalent: "")
         menu.addItem(withTitle: "Dictar / detener", action: #selector(dictateAction), keyEquivalent: "")
+        menu.addItem(withTitle: "Leer en voz alta (Alt+R)", action: #selector(readAction), keyEquivalent: "")
         let continuous = NSMenuItem(title: "Conversación continua", action: #selector(continuousAction), keyEquivalent: "")
         continuous.state = self.continuous ? .on : .off
         continuous.target = self
@@ -221,6 +223,10 @@ final class MaskView: NSView {
     @objc private func dictateAction() {
         onOpen?()
         onDictate?()
+    }
+
+    @objc private func readAction() {
+        onRead?()
     }
 
     @objc private func pauseAction(_ sender: NSMenuItem) {
@@ -261,6 +267,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let hotKeySignature = OSType(0x48414E46) // "HANF"
     private let dictation = WhisperDictation()
     private let wakeWord = WhisperStreamWake()
+    private let speaker = Speaker()
+    private var readHotKeyRef: EventHotKeyRef?
     private var view: MaskView?
     private var pendingDictation: DispatchWorkItem?
     private var continuous = false
@@ -320,6 +328,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mask.onToggleLogin = { [weak self] enabled in self?.setLaunchAtLogin(enabled) }
         mask.onToggleContinuous = { [weak self] enabled in self?.setContinuous(enabled) }
         mask.onTogglePause = { [weak self] paused in self?.setListeningPaused(paused) }
+        mask.onRead = { [weak self] in self?.readAloud() }
         mask.launchAtLogin = UserDefaults.standard.bool(forKey: loginKey)
         // 13 nov 2026: la conversación continua quedó apagada por defecto. Con el
         // micrófono abierto siempre, whisper-stream oía la tele/YouTube y mandaba
@@ -366,27 +375,55 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             eventClass: OSType(kEventClassKeyboard),
             eventKind: UInt32(kEventHotKeyPressed)
         )
-        let hotKeyID = EventHotKeyID(signature: hotKeySignature, id: 1)
-        let status = RegisterEventHotKey(
+
+        // Alt+V dicta; Alt+R lee en voz alta la selección o el portapapeles.
+        let dictateID = EventHotKeyID(signature: hotKeySignature, id: 1)
+        let dictateStatus = RegisterEventHotKey(
             UInt32(kVK_ANSI_V),
             UInt32(optionKey),
-            hotKeyID,
+            dictateID,
             GetApplicationEventTarget(),
             0,
             &hotKeyRef
         )
-        guard status == noErr else {
-            NSLog("Harness Face: no pude registrar Alt+V (%d)", status)
-            return
+        if dictateStatus != noErr {
+            NSLog("Harness Face: no pude registrar Alt+V (%d)", dictateStatus)
+        }
+
+        let readID = EventHotKeyID(signature: hotKeySignature, id: 2)
+        let readStatus = RegisterEventHotKey(
+            UInt32(kVK_ANSI_R),
+            UInt32(optionKey),
+            readID,
+            GetApplicationEventTarget(),
+            0,
+            &readHotKeyRef
+        )
+        if readStatus != noErr {
+            NSLog("Harness Face: no pude registrar Alt+R (%d)", readStatus)
         }
 
         let selfPointer = UnsafeMutableRawPointer(Unmanaged.passUnretained(self).toOpaque())
         InstallEventHandler(
             GetApplicationEventTarget(),
-            { _, _, userData in
-                guard let userData else { return noErr }
+            { _, event, userData in
+                guard let userData, let event else { return noErr }
                 let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
-                delegate.hotKeyPressed()
+                var hotKeyID = EventHotKeyID()
+                let result = GetEventParameter(
+                    event,
+                    EventParamName(kEventParamDirectObject),
+                    EventParamType(typeEventHotKeyID),
+                    nil,
+                    MemoryLayout<EventHotKeyID>.size,
+                    nil,
+                    &hotKeyID
+                )
+                if result == noErr, hotKeyID.id == 2 {
+                    delegate.readAloud()
+                } else {
+                    delegate.hotKeyPressed()
+                }
                 return noErr
             },
             1,
@@ -394,6 +431,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             selfPointer,
             &eventHandlerRef
         )
+    }
+
+    @objc func readAloud() {
+        if speaker.isSpeaking {
+            speaker.stop()
+            return
+        }
+        speaker.readSelection()
     }
 
     @objc func openHarness() {
@@ -559,6 +604,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     func applicationWillTerminate(_ notification: Notification) {
         if let hotKeyRef { UnregisterEventHotKey(hotKeyRef) }
+        if let readHotKeyRef { UnregisterEventHotKey(readHotKeyRef) }
         if let eventHandlerRef { RemoveEventHandler(eventHandlerRef) }
     }
 }

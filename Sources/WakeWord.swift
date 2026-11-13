@@ -13,17 +13,35 @@ final class WakeWord {
     private var restartWork: DispatchWorkItem?
     var enabled = true
     var onWake: (() -> Void)?
+    private let debugURL = URL(fileURLWithPath: "/tmp/harness-wake.log")
+
+    private func log(_ message: String) {
+        let line = "\(Date()) \(message)\n"
+        if let handle = try? FileHandle(forWritingTo: debugURL) {
+            handle.seekToEndOfFile()
+            handle.write(line.data(using: .utf8) ?? Data())
+            try? handle.close()
+        } else {
+            try? line.write(to: debugURL, atomically: true, encoding: .utf8)
+        }
+    }
 
     func start() {
+        log("start enabled=\(enabled) running=\(running)")
         guard enabled, !running else { return }
-        guard let recognizer, recognizer.isAvailable else { return }
+        guard let recognizer, recognizer.isAvailable else {
+            log("recognizer not available")
+            return
+        }
         running = true
         SFSpeechRecognizer.requestAuthorization { [weak self] status in
+            self?.log("speech auth=\(status.rawValue)")
             guard status == .authorized else {
                 self?.running = false
                 return
             }
             AVCaptureDevice.requestAccess(for: .audio) { granted in
+                self?.log("mic granted=\(granted)")
                 guard granted else {
                     self?.running = false
                     return
@@ -34,12 +52,12 @@ final class WakeWord {
     }
 
     private func begin(_ recognizer: SFSpeechRecognizer) {
+        log("begin enabled=\(enabled) running=\(running)")
         guard enabled, running else { return }
         let request = SFSpeechAudioBufferRecognitionRequest()
         request.shouldReportPartialResults = true
-        if recognizer.supportsOnDeviceRecognition {
-            request.requiresOnDeviceRecognition = true
-        }
+        // Do not force on-device: the Spanish asset can invalidate and leave the
+        // listener silent. Apple's Speech service decides the best path.
         self.request = request
 
         let input = engine.inputNode
@@ -56,8 +74,9 @@ final class WakeWord {
         do {
             engine.prepare()
             try engine.start()
+            log("engine started")
         } catch {
-            NSLog("Harness Face: wake word no pudo arrancar: %@", error.localizedDescription)
+            log("engine error: \(error.localizedDescription)")
             cleanup()
             running = false
             return
@@ -65,6 +84,12 @@ final class WakeWord {
 
         task = recognizer.recognitionTask(with: request) { [weak self] result, error in
             guard let self else { return }
+            if let text = result?.bestTranscription.formattedString {
+                log("heard: \(text)")
+            }
+            if let error {
+                log("task error: \(error.localizedDescription)")
+            }
             if let text = result?.bestTranscription.formattedString, Self.containsWakeWord(text) {
                 DispatchQueue.main.async {
                     self.stop()
