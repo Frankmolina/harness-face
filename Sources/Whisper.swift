@@ -7,6 +7,18 @@ final class WhisperEngine {
     private let modelDir = FileManager.default.homeDirectoryForCurrentUser
         .appendingPathComponent("Library/Application Support/Harness Face/Models")
 
+    private let logURL = URL(fileURLWithPath: "/tmp/harness-whisper-engine.log")
+    private func log(_ message: String) {
+        let line = "\(Date()) \(message)\n"
+        if let handle = try? FileHandle(forWritingTo: logURL) {
+            handle.seekToEndOfFile()
+            handle.write(line.data(using: .utf8) ?? Data())
+            try? handle.close()
+        } else {
+            try? line.write(to: logURL, atomically: true, encoding: .utf8)
+        }
+    }
+
     private var modelPath: String? {
         for name in ["ggml-small.bin", "ggml-base.bin"] {
             let path = modelDir.appendingPathComponent(name).path
@@ -38,6 +50,7 @@ final class WhisperEngine {
                     .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
                     .filter { !$0.isEmpty && !$0.hasPrefix("[") }
                     .joined(separator: " ")
+                self.log("text=\(text)")
                 DispatchQueue.main.async { completion(text) }
             } catch {
                 NSLog("Whisper: no pude ejecutar whisper-cli: %@", error.localizedDescription)
@@ -48,13 +61,28 @@ final class WhisperEngine {
 }
 
 final class WhisperRecorder {
+    private let logURL = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Harness Face/whisper.log")
+    private func log(_ message: String) {
+        let line = "\(Date()) \(message)\n"
+        if let handle = try? FileHandle(forWritingTo: logURL) {
+            handle.seekToEndOfFile()
+            handle.write(line.data(using: .utf8) ?? Data())
+            try? handle.close()
+        } else {
+            try? line.write(to: logURL, atomically: true, encoding: .utf8)
+        }
+    }
+
     private var recorder: AVAudioRecorder?
     private(set) var currentURL: URL?
     var isRecording: Bool { recorder?.isRecording ?? false }
 
     func start(duration: TimeInterval? = nil) -> URL? {
-        guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
-            NSLog("Whisper: micrófono sin permiso")
+        let status = AVCaptureDevice.authorizationStatus(for: .audio)
+        log("start status=\(status.rawValue)")
+        guard status == .authorized else {
+            log("no autorizado")
             return nil
         }
         let url = FileManager.default.temporaryDirectory
@@ -79,7 +107,7 @@ final class WhisperRecorder {
             self.currentURL = url
             return url
         } catch {
-            NSLog("Whisper: no pude grabar: %@", error.localizedDescription)
+            log("AVAudioRecorder error: \(error.localizedDescription)")
             return nil
         }
     }
@@ -91,6 +119,8 @@ final class WhisperRecorder {
         self.recorder = nil
         self.currentURL = nil
         guard let url, FileManager.default.fileExists(atPath: url.path) else { return nil }
+        let size = (try? FileManager.default.attributesOfItem(atPath: url.path)[.size] as? Int) ?? 0
+        log("stop \(url.lastPathComponent) size=\(size ?? 0)")
         return url
     }
 }
@@ -136,7 +166,7 @@ final class WhisperWake {
 
     private func listen() {
         guard enabled, running else { return }
-        guard recorder.start(duration: 3) != nil else {
+        guard recorder.start(duration: 5) != nil else {
             work = nil
             DispatchQueue.main.asyncAfter(deadline: .now() + 2) { [weak self] in self?.listen() }
             return
@@ -158,7 +188,7 @@ final class WhisperWake {
             }
         }
         self.work = work
-        DispatchQueue.main.asyncAfter(deadline: .now() + 3.2, execute: work)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 5.2, execute: work)
     }
 
     static func containsWakeWord(_ text: String) -> Bool {
@@ -166,7 +196,7 @@ final class WhisperWake {
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
             .lowercased()
             .replacingOccurrences(of: " ", with: "")
-        let candidates = ["veniron", "beniron", "venirion", "benirion", "venirron", "benirron", "venirom", "benirom"]
+        let candidates = ["veniron", "beniron", "venirion", "benirion", "venirron", "benirron", "venirom", "benirom", "venido", "benido"]
         return candidates.contains { folded.contains($0) }
     }
 }
