@@ -1,4 +1,5 @@
 import AppKit
+import ApplicationServices
 import Carbon
 import ServiceManagement
 
@@ -17,7 +18,10 @@ final class MaskView: NSView {
     private var downPoint: NSPoint?
     private var dragged = false
 
-    override var isFlipped: Bool { false }
+    // El dibujo usa fracciones contadas desde arriba (top = 0.20, chin = 0.82).
+    // Con isFlipped = true el origen y=0 es el borde superior y la cara sale derecha;
+    // con false salía invertida (barbilla arriba, ojos abajo).
+    override var isFlipped: Bool { true }
 
     override func draw(_ dirtyRect: NSRect) {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
@@ -158,7 +162,9 @@ final class MaskView: NSView {
         if abs(event.deltaX) + abs(event.deltaY) > 1 { dragged = true }
         var frame = window.frame
         frame.origin.x += event.deltaX
-        frame.origin.y += event.deltaY
+        // deltaY de NSEvent crece hacia abajo (origen de pantalla arriba-izquierda),
+        // mientras que frame.origin.y crece hacia arriba: hay que restar.
+        frame.origin.y -= event.deltaY
         window.setFrameOrigin(frame.origin)
     }
 
@@ -314,17 +320,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     @objc func openHarness() {
-        NSApp.activate(ignoringOtherApps: true)
         let running = NSRunningApplication.runningApplications(withBundleIdentifier: harnessBundleID)
         if let app = running.first {
-            app.activate(options: [.activateIgnoringOtherApps])
+            app.unhide()
+            app.activate(options: [.activateAllWindows])
+            restoreWindows(of: app)
+            // LaunchServices "open" es lo mismo que el clic en el Dock: restaura la
+            // ventana minimizada. Es el fallback cuando no hay permiso de Accesibilidad.
+            let url = URL(fileURLWithPath: harnessAppPath)
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            config.createsNewApplicationInstance = false
+            NSWorkspace.shared.openApplication(at: url, configuration: config) { _, _ in }
             return
         }
         let url = URL(fileURLWithPath: harnessAppPath)
-        NSWorkspace.shared.openApplication(at: url, configuration: NSWorkspace.OpenConfiguration()) { _, error in
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: config) { _, error in
             if let error {
                 NSLog("Harness Face: no pude abrir Harness: %@", error.localizedDescription)
             }
+        }
+    }
+
+    /// Desminiaturiza las ventanas de Harness. Sin permiso de Accesibilidad las
+    /// llamadas AX fallan en silencio y queda el fallback de LaunchServices.
+    private func restoreWindows(of app: NSRunningApplication) {
+        let ax = AXUIElementCreateApplication(app.processIdentifier)
+        var value: CFTypeRef?
+        guard AXUIElementCopyAttributeValue(ax, kAXWindowsAttribute as CFString, &value) == .success,
+              let windows = value as? [AXUIElement], !windows.isEmpty
+        else { return }
+        for window in windows {
+            AXUIElementSetAttributeValue(window, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+        }
+        if let first = windows.first {
+            AXUIElementPerformAction(first, kAXRaiseAction as CFString)
         }
     }
 
