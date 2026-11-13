@@ -1,7 +1,7 @@
 import AVFoundation
 import Speech
 
-/// Always-on, local wake-word listener for "Benon".
+/// Always-on, local wake-word listener for "Veniron".
 /// It owns the microphone only while idle; Dictation stops it before recording.
 final class WakeWord {
     private let recognizer = SFSpeechRecognizer(locale: Locale(identifier: "es-ES"))
@@ -120,7 +120,11 @@ final class WakeWord {
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
             .lowercased()
         let compact = folded.replacingOccurrences(of: " ", with: "")
-        // Accept the spelling and the most common Spanish transcriptions.
-        return compact.contains("benon") || compact.contains("venon") || compact.contains("benom") || compact.contains("benan")
+        // "Veniron" and the usual Spanish transcriptions (V/B, accent, joined/split words).
+        let candidates = [
+            "veniron", "beniron", "venirion", "benirion",
+            "venirom", "benirom", "venirron", "benirron",
+        ]
+        return candidates.contains { compact.contains($0) }
     }
 }
