@@ -12,8 +12,10 @@ final class MaskView: NSView {
     var onDictate: (() -> Void)?
     var onToggleLogin: ((Bool) -> Void)?
     var onToggleContinuous: ((Bool) -> Void)?
+    var onTogglePause: ((Bool) -> Void)?
     var launchAtLogin = false
     var continuous = true
+    var paused = false
     private var hovered = false
     private var listening = false
     private var tracking: NSTrackingArea?
@@ -124,12 +126,26 @@ final class MaskView: NSView {
                      controlPoint2: NSPoint(x: cx - 3, y: bounds.minY + bounds.height * 0.70))
         goatee.close()
         goatee.fill()
+
+        if paused {
+            // A dark pause badge over the mask while listening is paused.
+            let badge = NSBezierPath(ovalIn: bounds.insetBy(dx: bounds.width * 0.36, dy: bounds.height * 0.36))
+            NSColor(calibratedWhite: 0.02, alpha: 0.88).setFill()
+            badge.fill()
+            NSColor(calibratedRed: 0.0, green: 0.70, blue: 1.0, alpha: 0.95).setStroke()
+            badge.lineWidth = 1.5
+            badge.stroke()
+            NSColor.white.setFill()
+            NSBezierPath(rect: NSRect(x: cx - 5, y: bounds.minY + bounds.height * 0.44, width: 3, height: 12)).fill()
+            NSBezierPath(rect: NSRect(x: cx + 2, y: bounds.minY + bounds.height * 0.44, width: 3, height: 12)).fill()
+        }
     }
 
     func setListening(_ value: Bool) {
         listening = value
         needsDisplay = true
     }
+
 
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
@@ -184,6 +200,10 @@ final class MaskView: NSView {
         continuous.state = self.continuous ? .on : .off
         continuous.target = self
         menu.addItem(continuous)
+        let pause = NSMenuItem(title: "Pausar escucha", action: #selector(pauseAction), keyEquivalent: "")
+        pause.state = paused ? .on : .off
+        pause.target = self
+        menu.addItem(pause)
         let login = NSMenuItem(title: "Abrir al iniciar sesión", action: #selector(loginAction), keyEquivalent: "")
         login.state = launchAtLogin ? .on : .off
         login.target = self
@@ -201,6 +221,13 @@ final class MaskView: NSView {
     @objc private func dictateAction() {
         onOpen?()
         onDictate?()
+    }
+
+    @objc private func pauseAction(_ sender: NSMenuItem) {
+        let next = sender.state != .on
+        sender.state = next ? .on : .off
+        paused = next
+        onTogglePause?(next)
     }
 
     @objc private func continuousAction(_ sender: NSMenuItem) {
@@ -237,8 +264,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var view: MaskView?
     private var pendingDictation: DispatchWorkItem?
     private var continuous = true
+    private var listeningPaused = false
     private let loginKey = "launchAtLogin"
     private let continuousKey = "continuousConversation"
+    private let pausedKey = "listeningPaused"
     private let originXKey = "maskOriginX"
     private let originYKey = "maskOriginY"
 
@@ -246,7 +275,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
         createPanel()
         registerHotKey()
-        wakeWord.start()
+        if !listeningPaused { wakeWord.start() }
         configureLaunchAtLogin()
     }
 
@@ -287,9 +316,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mask.onDictate = { [weak self] in self?.dictation.toggle() }
         mask.onToggleLogin = { [weak self] enabled in self?.setLaunchAtLogin(enabled) }
         mask.onToggleContinuous = { [weak self] enabled in self?.setContinuous(enabled) }
+        mask.onTogglePause = { [weak self] paused in self?.setListeningPaused(paused) }
         mask.launchAtLogin = UserDefaults.standard.bool(forKey: loginKey)
         continuous = (UserDefaults.standard.object(forKey: continuousKey) as? Bool) ?? true
         mask.continuous = continuous
+        listeningPaused = UserDefaults.standard.bool(forKey: pausedKey)
+        mask.paused = listeningPaused
         dictation.onStateChange = { [weak self] listening in
             self?.maskView?.setListening(listening)
         }
@@ -297,7 +329,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.pasteIntoHarness(text)
         }
         dictation.onFinished = { [weak self] in
-            guard let self else { return }
+            guard let self, !self.listeningPaused else { return }
             if self.continuous {
                 self.scheduleNextDictation()
             } else {
@@ -305,7 +337,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             }
         }
         wakeWord.onWake = { [weak self] in
-            guard let self else { return }
+            guard let self, !self.listeningPaused else { return }
             self.openHarness()
             self.wakeWord.stop()
             self.dictation.start()
@@ -445,6 +477,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         pendingDictation = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
+    }
+
+    private func setListeningPaused(_ paused: Bool) {
+        listeningPaused = paused
+        UserDefaults.standard.set(paused, forKey: pausedKey)
+        maskView?.paused = paused
+        if paused {
+            pendingDictation?.cancel()
+            pendingDictation = nil
+            wakeWord.stop()
+            if dictation.isRecording { dictation.stop() }
+        } else {
+            wakeWord.resume()
+        }
     }
 
     private func setContinuous(_ enabled: Bool) {
