@@ -10,6 +10,7 @@ final class Dictation {
     private var request: SFSpeechAudioBufferRecognitionRequest?
     private var task: SFSpeechRecognitionTask?
     private var tapInstalled = false
+    private var stopWork: DispatchWorkItem?
     private(set) var isRecording = false
     var onStateChange: ((Bool) -> Void)?
     var onFinal: ((String) -> Void)?
@@ -62,7 +63,7 @@ final class Dictation {
             try engine.start()
         } catch {
             NSLog("Harness Face: no pude arrancar el micrófono: %@", error.localizedDescription)
-            cleanup()
+            cleanup(cancelTask: true)
             return
         }
 
@@ -73,30 +74,45 @@ final class Dictation {
             if let result, result.isFinal {
                 let text = result.bestTranscription.formattedString.trimmingCharacters(in: .whitespacesAndNewlines)
                 DispatchQueue.main.async {
-                    self.cleanup()
+                    self.stopWork?.cancel()
+                    self.stopWork = nil
+                    self.cleanup(cancelTask: false)
                     if !text.isEmpty { self.onFinal?(text) }
                 }
             } else if error != nil {
-                DispatchQueue.main.async { self.cleanup() }
+                DispatchQueue.main.async { self.cleanup(cancelTask: true) }
             }
         }
     }
 
     func stop() {
         guard isRecording else { return }
+        isRecording = false
+        onStateChange?(false)
+        // Let Speech deliver the final result; do not cancel it here.
         request?.endAudio()
-        task?.finish()
-        cleanup()
+        if tapInstalled {
+            engine.inputNode.removeTap(onBus: 0)
+            tapInstalled = false
+        }
+        engine.stop()
+        stopWork?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            self?.stopWork = nil
+            self?.cleanup(cancelTask: true)
+        }
+        stopWork = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
     }
 
-    private func cleanup() {
+    private func cleanup(cancelTask: Bool) {
         if tapInstalled {
             engine.inputNode.removeTap(onBus: 0)
             tapInstalled = false
         }
         engine.stop()
         request = nil
-        task?.cancel()
+        if cancelTask { task?.cancel() }
         task = nil
         if isRecording {
             isRecording = false
