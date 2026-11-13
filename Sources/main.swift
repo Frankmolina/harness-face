@@ -219,8 +219,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
     private let hotKeySignature = OSType(0x48414E46) // "HANF"
-    private let dictation = Dictation()
-    private let wakeWord = WakeWord()
+    private let dictation = WhisperDictation()
+    private let wakeWord = WhisperWake()
     private var view: MaskView?
     private let loginKey = "launchAtLogin"
     private let originXKey = "maskOriginX"
@@ -230,8 +230,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
         createPanel()
         registerHotKey()
-        configureLaunchAtLogin()
         wakeWord.start()
+        configureLaunchAtLogin()
     }
 
     private func createPanel() {
