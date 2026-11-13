@@ -11,7 +11,9 @@ final class MaskView: NSView {
     var onQuit: (() -> Void)?
     var onDictate: (() -> Void)?
     var onToggleLogin: ((Bool) -> Void)?
+    var onToggleContinuous: ((Bool) -> Void)?
     var launchAtLogin = false
+    var continuous = true
     private var hovered = false
     private var listening = false
     private var tracking: NSTrackingArea?
@@ -178,6 +180,10 @@ final class MaskView: NSView {
         let menu = NSMenu()
         menu.addItem(withTitle: "Abrir Harness", action: #selector(openAction), keyEquivalent: "")
         menu.addItem(withTitle: "Dictar / detener", action: #selector(dictateAction), keyEquivalent: "")
+        let continuous = NSMenuItem(title: "Conversación continua", action: #selector(continuousAction), keyEquivalent: "")
+        continuous.state = self.continuous ? .on : .off
+        continuous.target = self
+        menu.addItem(continuous)
         let login = NSMenuItem(title: "Abrir al iniciar sesión", action: #selector(loginAction), keyEquivalent: "")
         login.state = launchAtLogin ? .on : .off
         login.target = self
@@ -195,6 +201,13 @@ final class MaskView: NSView {
     @objc private func dictateAction() {
         onOpen?()
         onDictate?()
+    }
+
+    @objc private func continuousAction(_ sender: NSMenuItem) {
+        let next = sender.state != .on
+        sender.state = next ? .on : .off
+        continuous = next
+        onToggleContinuous?(next)
     }
 
     @objc private func loginAction(_ sender: NSMenuItem) {
@@ -222,7 +235,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let dictation = WhisperDictation()
     private let wakeWord = WhisperStreamWake()
     private var view: MaskView?
+    private var pendingDictation: DispatchWorkItem?
+    private var continuous = true
     private let loginKey = "launchAtLogin"
+    private let continuousKey = "continuousConversation"
     private let originXKey = "maskOriginX"
     private let originYKey = "maskOriginY"
 
@@ -270,7 +286,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mask.onQuit = { NSApp.terminate(nil) }
         mask.onDictate = { [weak self] in self?.dictation.toggle() }
         mask.onToggleLogin = { [weak self] enabled in self?.setLaunchAtLogin(enabled) }
+        mask.onToggleContinuous = { [weak self] enabled in self?.setContinuous(enabled) }
         mask.launchAtLogin = UserDefaults.standard.bool(forKey: loginKey)
+        continuous = (UserDefaults.standard.object(forKey: continuousKey) as? Bool) ?? true
+        mask.continuous = continuous
         dictation.onStateChange = { [weak self] listening in
             self?.maskView?.setListening(listening)
         }
@@ -278,7 +297,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             self?.pasteIntoHarness(text)
         }
         dictation.onFinished = { [weak self] in
-            self?.wakeWord.resume()
+            guard let self else { return }
+            if self.continuous {
+                self.scheduleNextDictation()
+            } else {
+                self.wakeWord.resume()
+            }
         }
         wakeWord.onWake = { [weak self] in
             guard let self else { return }
@@ -397,6 +421,43 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             up.flags = .maskCommand
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
+
+            if self.continuous {
+                // Send the dictation, then listen again after the reply window.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.6) {
+                    guard let source = CGEventSource(stateID: .combinedSessionState),
+                          let down = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: true),
+                          let up = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false)
+                    else { return }
+                    down.post(tap: .cghidEventTap)
+                    up.post(tap: .cghidEventTap)
+                }
+            }
+        }
+    }
+
+    private func scheduleNextDictation() {
+        pendingDictation?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self, self.continuous, !self.dictation.isRecording else { return }
+            self.openHarness()
+            self.dictation.start()
+        }
+        pendingDictation = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)
+    }
+
+    private func setContinuous(_ enabled: Bool) {
+        continuous = enabled
+        UserDefaults.standard.set(enabled, forKey: continuousKey)
+        maskView?.continuous = enabled
+        if enabled {
+            wakeWord.stop()
+            scheduleNextDictation()
+        } else {
+            pendingDictation?.cancel()
+            pendingDictation = nil
+            wakeWord.resume()
         }
     }
 
