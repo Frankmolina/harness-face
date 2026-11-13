@@ -5,7 +5,7 @@ APP="build/Harness Face.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
 swiftc -O -o "$APP/Contents/MacOS/HarnessFace" Sources/main.swift Sources/Dictation.swift \
-  -framework Cocoa -framework Carbon -framework Speech -framework AVFoundation
+  -framework Cocoa -framework Carbon -framework Speech -framework AVFoundation -framework ServiceManagement
 cp Info.plist "$APP/Contents/Info.plist"
 # The Desktop is often managed by iCloud/FileProvider: its xattrs make codesign
 # refuse a bundle even after xattr -cr. Sign a clean /tmp copy and bring it back.

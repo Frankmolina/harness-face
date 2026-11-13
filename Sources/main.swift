@@ -1,5 +1,6 @@
 import AppKit
 import Carbon
+import ServiceManagement
 
 private let harnessBundleID = "com.deepseek.dsh"
 private let harnessAppPath = "/Applications/DeepSeek Harness.app"
@@ -8,9 +9,13 @@ final class MaskView: NSView {
     var onOpen: (() -> Void)?
     var onQuit: (() -> Void)?
     var onDictate: (() -> Void)?
+    var onToggleLogin: ((Bool) -> Void)?
+    var launchAtLogin = false
     private var hovered = false
     private var listening = false
     private var tracking: NSTrackingArea?
+    private var downPoint: NSPoint?
+    private var dragged = false
 
     override var isFlipped: Bool { false }
 
@@ -144,16 +149,36 @@ final class MaskView: NSView {
     }
 
     override func mouseDown(with event: NSEvent) {
-        onOpen?()
+        downPoint = event.locationInWindow
+        dragged = false
+    }
+
+    override func mouseDragged(with event: NSEvent) {
+        guard downPoint != nil, let window else { return }
+        if abs(event.deltaX) + abs(event.deltaY) > 1 { dragged = true }
+        var frame = window.frame
+        frame.origin.x += event.deltaX
+        frame.origin.y += event.deltaY
+        window.setFrameOrigin(frame.origin)
+    }
+
+    override func mouseUp(with event: NSEvent) {
+        if !dragged { onOpen?() }
+        downPoint = nil
+        dragged = false
     }
 
     override func rightMouseDown(with event: NSEvent) {
         let menu = NSMenu()
         menu.addItem(withTitle: "Abrir Harness", action: #selector(openAction), keyEquivalent: "")
         menu.addItem(withTitle: "Dictar / detener", action: #selector(dictateAction), keyEquivalent: "")
+        let login = NSMenuItem(title: "Abrir al iniciar sesión", action: #selector(loginAction), keyEquivalent: "")
+        login.state = launchAtLogin ? .on : .off
+        login.target = self
+        menu.addItem(login)
         menu.addItem(.separator())
         menu.addItem(withTitle: "Salir de Harness Face", action: #selector(quitAction), keyEquivalent: "q")
-        for item in menu.items { item.target = self }
+        for item in menu.items where item.target == nil { item.target = self }
         NSMenu.popUpContextMenu(menu, with: event, for: self)
     }
 
@@ -166,6 +191,13 @@ final class MaskView: NSView {
         onDictate?()
     }
 
+    @objc private func loginAction(_ sender: NSMenuItem) {
+        let next = sender.state != .on
+        sender.state = next ? .on : .off
+        launchAtLogin = next
+        onToggleLogin?(next)
+    }
+
     @objc private func quitAction() {
         onQuit?()
     }
@@ -175,7 +207,7 @@ final class MaskView: NSView {
     }
 }
 
-final class AppDelegate: NSObject, NSApplicationDelegate {
+final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var panel: NSPanel?
     private var maskView: MaskView?
     private var hotKeyRef: EventHotKeyRef?
@@ -183,17 +215,31 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private let hotKeySignature = OSType(0x48414E46) // "HANF"
     private let dictation = Dictation()
     private var view: MaskView?
+    private let loginKey = "launchAtLogin"
+    private let originXKey = "maskOriginX"
+    private let originYKey = "maskOriginY"
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
         createPanel()
         registerHotKey()
+        configureLaunchAtLogin()
     }
 
     private func createPanel() {
         let size = NSSize(width: 84, height: 84)
         let screen = NSScreen.main?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-        let origin = NSPoint(x: screen.maxX - size.width - 24, y: screen.minY + 24)
+        let fallback = NSPoint(x: screen.maxX - size.width - 24, y: screen.minY + 24)
+        let defaults = UserDefaults.standard
+        let savedX = defaults.object(forKey: originXKey) as? Double
+        let savedY = defaults.object(forKey: originYKey) as? Double
+        var origin = fallback
+        if let savedX, let savedY {
+            let candidate = NSRect(x: savedX, y: savedY, width: size.width, height: size.height)
+            if NSScreen.screens.contains(where: { $0.visibleFrame.intersects(candidate) }) {
+                origin = NSPoint(x: savedX, y: savedY)
+            }
+        }
 
         let panel = NSPanel(
             contentRect: NSRect(origin: origin, size: size),
@@ -215,6 +261,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mask.onOpen = { [weak self] in self?.openHarness() }
         mask.onQuit = { NSApp.terminate(nil) }
         mask.onDictate = { [weak self] in self?.dictation.toggle() }
+        mask.onToggleLogin = { [weak self] enabled in self?.setLaunchAtLogin(enabled) }
+        mask.launchAtLogin = UserDefaults.standard.bool(forKey: loginKey)
         dictation.onStateChange = { [weak self] listening in
             self?.maskView?.setListening(listening)
         }
@@ -223,6 +271,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         panel.contentView = mask
 
+        panel.delegate = self
         panel.orderFrontRegardless()
         self.panel = panel
         self.maskView = mask
@@ -303,6 +352,36 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             up.flags = .maskCommand
             down.post(tap: .cghidEventTap)
             up.post(tap: .cghidEventTap)
+        }
+    }
+
+    func windowDidMove(_ notification: Notification) {
+        guard let panel else { return }
+        let defaults = UserDefaults.standard
+        defaults.set(panel.frame.origin.x, forKey: originXKey)
+        defaults.set(panel.frame.origin.y, forKey: originYKey)
+    }
+
+    private func configureLaunchAtLogin() {
+        let defaults = UserDefaults.standard
+        if defaults.object(forKey: loginKey) == nil { defaults.set(true, forKey: loginKey) }
+        setLaunchAtLogin(defaults.bool(forKey: loginKey))
+    }
+
+    private func setLaunchAtLogin(_ enabled: Bool) {
+        let defaults = UserDefaults.standard
+        defaults.set(enabled, forKey: loginKey)
+        maskView?.launchAtLogin = enabled
+        guard #available(macOS 13.0, *) else { return }
+        let service = SMAppService.mainApp
+        do {
+            if enabled {
+                if service.status != .enabled { try service.register() }
+            } else if service.status == .enabled {
+                try service.unregister()
+            }
+        } catch {
+            NSLog("Harness Face: no pude cambiar el inicio de sesión: %@", error.localizedDescription)
         }
     }
 

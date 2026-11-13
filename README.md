@@ -9,6 +9,8 @@ Una cara mínima para DeepSeek Harness: una máscara flotante siempre visible y
 - Clic izquierdo: abre/enfoca **DeepSeek Harness**.
 - Clic derecho: menú para abrir Harness o salir.
 - **Alt+V** global: trae Harness y empieza a dictar en español con Speech nativo.
+- La posición de la máscara se recuerda entre arranques.
+- Al iniciar sesión se arranca por defecto; el menú contextual permite desactivarlo.
 - El dictado acaba en el portapapeles y se pega en el chat de Harness con Cmd+V; no envía.
 - macOS pedirá permiso de micrófono/reconocimiento de voz la primera vez, y Accesibilidad para pegar. Sin Accesibilidad el texto queda en el portapapeles.
 - No habla con Harness por API: solo activa la app existente.
