@@ -14,6 +14,7 @@ final class Dictation {
     private(set) var isRecording = false
     var onStateChange: ((Bool) -> Void)?
     var onFinal: ((String) -> Void)?
+    var onFinished: (() -> Void)?
 
     func toggle() {
         if isRecording { stop() } else { start() }
@@ -78,9 +79,13 @@ final class Dictation {
                     self.stopWork = nil
                     self.cleanup(cancelTask: false)
                     if !text.isEmpty { self.onFinal?(text) }
+                    self.onFinished?()
                 }
             } else if error != nil {
-                DispatchQueue.main.async { self.cleanup(cancelTask: true) }
+                DispatchQueue.main.async {
+                    self.cleanup(cancelTask: true)
+                    self.onFinished?()
+                }
             }
         }
     }
@@ -100,6 +105,7 @@ final class Dictation {
         let work = DispatchWorkItem { [weak self] in
             self?.stopWork = nil
             self?.cleanup(cancelTask: true)
+            self?.onFinished?()
         }
         stopWork = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 8, execute: work)

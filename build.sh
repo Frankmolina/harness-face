@@ -4,7 +4,7 @@ cd "$(dirname "$0")"
 APP="build/Harness Face.app"
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-swiftc -O -o "$APP/Contents/MacOS/HarnessFace" Sources/main.swift Sources/Dictation.swift \
+swiftc -O -o "$APP/Contents/MacOS/HarnessFace" Sources/main.swift Sources/Dictation.swift Sources/WakeWord.swift \
   -framework Cocoa -framework Carbon -framework Speech -framework AVFoundation -framework ServiceManagement
 cp Info.plist "$APP/Contents/Info.plist"
 # The Desktop is often managed by iCloud/FileProvider: its xattrs make codesign

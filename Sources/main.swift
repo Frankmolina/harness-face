@@ -220,6 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var eventHandlerRef: EventHandlerRef?
     private let hotKeySignature = OSType(0x48414E46) // "HANF"
     private let dictation = Dictation()
+    private let wakeWord = WakeWord()
     private var view: MaskView?
     private let loginKey = "launchAtLogin"
     private let originXKey = "maskOriginX"
@@ -230,6 +231,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         createPanel()
         registerHotKey()
         configureLaunchAtLogin()
+        wakeWord.start()
     }
 
     private func createPanel() {
@@ -274,6 +276,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         }
         dictation.onFinal = { [weak self] text in
             self?.pasteIntoHarness(text)
+        }
+        dictation.onFinished = { [weak self] in
+            self?.wakeWord.resume()
+        }
+        wakeWord.onWake = { [weak self] in
+            guard let self else { return }
+            self.openHarness()
+            self.wakeWord.stop()
+            self.dictation.start()
         }
         panel.contentView = mask
 
@@ -362,9 +373,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
 
     @objc private func hotKeyPressed() {
         openHarness()
+        wakeWord.stop()
         // Leave enough time for Harness to take focus before dictating into it.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
-            self?.dictation.toggle()
+            guard let self else { return }
+            self.dictation.toggle()
         }
     }
 
