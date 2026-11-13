@@ -220,7 +220,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private var eventHandlerRef: EventHandlerRef?
     private let hotKeySignature = OSType(0x48414E46) // "HANF"
     private let dictation = WhisperDictation()
-    private let wakeWord = WhisperWake()
+    private let wakeWord = WhisperStreamWake()
     private var view: MaskView?
     private let loginKey = "launchAtLogin"
     private let originXKey = "maskOriginX"

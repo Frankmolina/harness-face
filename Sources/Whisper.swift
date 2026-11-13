@@ -244,3 +244,90 @@ final class WhisperDictation {
         }
     }
 }
+
+/// Continuous wake listener using whisper-stream: one microphone session, no
+/// start/stop flicker. It is killed before dictation records.
+final class WhisperStreamWake {
+    private let binary = "/opt/homebrew/bin/whisper-stream"
+    private let modelDir = FileManager.default.homeDirectoryForCurrentUser
+        .appendingPathComponent("Library/Application Support/Harness Face/Models")
+    private var process: Process?
+    private var buffer = ""
+    private var running = false
+    var enabled = true
+    var onWake: (() -> Void)?
+
+    private var modelPath: String? {
+        for name in ["ggml-small.bin", "ggml-base.bin"] {
+            let path = modelDir.appendingPathComponent(name).path
+            if FileManager.default.fileExists(atPath: path) { return path }
+        }
+        return nil
+    }
+
+    func start() {
+        guard enabled, !running, let model = modelPath else { return }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: binary)
+        process.arguments = [
+            "-m", model, "-l", "es",
+            "--step", "2500", "--length", "6000", "--keep", "300",
+        ]
+        let output = Pipe()
+        process.standardOutput = output
+        process.standardError = FileHandle.nullDevice
+        output.fileHandleForReading.readabilityHandler = { [weak self] handle in
+            let data = handle.availableData
+            guard !data.isEmpty, let chunk = String(data: data, encoding: .utf8) else { return }
+            DispatchQueue.main.async { self?.consume(chunk) }
+        }
+        process.terminationHandler = { [weak self] _ in
+            DispatchQueue.main.async {
+                self?.process = nil
+                self?.running = false
+                if self?.enabled == true {
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 1) { self?.start() }
+                }
+            }
+        }
+        do {
+            try process.run()
+            self.process = process
+            running = true
+        } catch {
+            NSLog("Whisper stream: no pude arrancar: %@", error.localizedDescription)
+        }
+    }
+
+    func stop() {
+        enabled = false
+        running = false
+        process?.terminate()
+        process = nil
+        buffer = ""
+    }
+
+    func resume() {
+        enabled = true
+        start()
+    }
+
+    private func consume(_ chunk: String) {
+        guard running, enabled else { return }
+        buffer.append(chunk)
+        if buffer.count > 4000 { buffer = String(buffer.suffix(2000)) }
+        if Self.containsWakeWord(buffer) {
+            stop()
+            onWake?()
+        }
+    }
+
+    static func containsWakeWord(_ text: String) -> Bool {
+        let folded = text
+            .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
+            .lowercased()
+            .replacingOccurrences(of: " ", with: "")
+        let candidates = ["veniron", "beniron", "venirion", "benirion", "venirron", "benirron", "venirom", "benirom", "venido", "benido"]
+        return candidates.contains { folded.contains($0) }
+    }
+}
