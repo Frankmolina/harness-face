@@ -7,6 +7,8 @@ private let harnessAppPath = "/Applications/DeepSeek Harness.app"
 final class MaskView: NSView {
     var onOpen: (() -> Void)?
     var onQuit: (() -> Void)?
+    private var hovered = false
+    private var tracking: NSTrackingArea?
 
     override var isFlipped: Bool { false }
 
@@ -14,7 +16,9 @@ final class MaskView: NSView {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         context.setShouldAntialias(true)
 
-        let bounds = self.bounds.insetBy(dx: 4, dy: 4)
+        // Hover shrinks the mask a little without moving the always-on-top panel.
+        let inset: CGFloat = hovered ? 8 : 4
+        let bounds = self.bounds.insetBy(dx: inset, dy: inset)
 
         // Electric blue halo behind the mask.
         let halo = NSBezierPath(ovalIn: bounds.insetBy(dx: 2, dy: 2))
@@ -107,6 +111,29 @@ final class MaskView: NSView {
                      controlPoint2: NSPoint(x: cx - 3, y: bounds.minY + bounds.height * 0.70))
         goatee.close()
         goatee.fill()
+    }
+
+    override func updateTrackingAreas() {
+        super.updateTrackingAreas()
+        if let tracking { removeTrackingArea(tracking) }
+        let area = NSTrackingArea(
+            rect: bounds,
+            options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+            owner: self,
+            userInfo: nil
+        )
+        addTrackingArea(area)
+        tracking = area
+    }
+
+    override func mouseEntered(with event: NSEvent) {
+        hovered = true
+        needsDisplay = true
+    }
+
+    override func mouseExited(with event: NSEvent) {
+        hovered = false
+        needsDisplay = true
     }
 
     override func mouseDown(with event: NSEvent) {

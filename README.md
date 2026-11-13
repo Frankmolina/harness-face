@@ -5,7 +5,7 @@ Una cara mínima para DeepSeek Harness: una máscara flotante siempre visible y
 
 ## Estado
 
-- Máscara always-on-top, sin icono en el Dock.
+- Máscara always-on-top, sin icono en el Dock; se encoge al pasar el ratón.
 - Clic izquierdo: abre/enfoca **DeepSeek Harness**.
 - Clic derecho: menú para abrir Harness o salir.
 - **Alt+V** global: lo mismo, desde cualquier app.
