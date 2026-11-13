@@ -77,6 +77,10 @@ final class WhisperRecorder {
     private var recorder: AVAudioRecorder?
     private(set) var currentURL: URL?
     var isRecording: Bool { recorder?.isRecording ?? false }
+    var averagePower: Float {
+        recorder?.updateMeters()
+        return recorder?.averagePower(forChannel: 0) ?? -160
+    }
 
     func start(duration: TimeInterval? = nil) -> URL? {
         let status = AVCaptureDevice.authorizationStatus(for: .audio)
@@ -97,7 +101,7 @@ final class WhisperRecorder {
         ]
         do {
             let recorder = try AVAudioRecorder(url: url, settings: settings)
-            recorder.isMeteringEnabled = false
+            recorder.isMeteringEnabled = true
             if let duration, duration > 0 {
                 recorder.record(forDuration: duration)
             } else {
@@ -196,7 +200,7 @@ final class WhisperWake {
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
             .lowercased()
             .replacingOccurrences(of: " ", with: "")
-        let candidates = ["veniron", "beniron", "venirion", "benirion", "venirron", "benirron", "venirom", "benirom", "venido", "benido"]
+        let candidates = ["veniron", "beniron", "venirion", "benirion", "venirron", "benirron", "venirom", "benirom"]
         return candidates.contains { folded.contains($0) }
     }
 }
@@ -205,10 +209,24 @@ final class WhisperDictation {
     private let engine = WhisperEngine()
     private let recorder = WhisperRecorder()
     private var timeout: DispatchWorkItem?
+    private var silenceTimer: DispatchSourceTimer?
+    private var heardSpeech = false
+    private var lastVoice = Date()
     private(set) var isRecording = false
     var onStateChange: ((Bool) -> Void)?
     var onFinal: ((String) -> Void)?
     var onFinished: (() -> Void)?
+
+    private func checkSilence() {
+        guard isRecording else { return }
+        let power = recorder.averagePower
+        if power > -35 {
+            heardSpeech = true
+            lastVoice = Date()
+        } else if heardSpeech, Date().timeIntervalSince(lastVoice) > 1.8 {
+            stop()
+        }
+    }
 
     func toggle() {
         if isRecording { stop() } else { start() }
@@ -221,10 +239,18 @@ final class WhisperDictation {
             return
         }
         isRecording = true
+        heardSpeech = false
+        lastVoice = Date()
         onStateChange?(true)
         let timeout = DispatchWorkItem { [weak self] in self?.stop() }
         self.timeout = timeout
         DispatchQueue.main.asyncAfter(deadline: .now() + 20, execute: timeout)
+        silenceTimer?.cancel()
+        let timer = DispatchSource.makeTimerSource(queue: .main)
+        timer.schedule(deadline: .now() + 0.25, repeating: 0.25)
+        timer.setEventHandler { [weak self] in self?.checkSilence() }
+        timer.resume()
+        silenceTimer = timer
     }
 
     func stop() {
@@ -232,6 +258,8 @@ final class WhisperDictation {
         isRecording = false
         timeout?.cancel()
         timeout = nil
+        silenceTimer?.cancel()
+        silenceTimer = nil
         onStateChange?(false)
         guard let url = recorder.stop() else {
             onFinished?()
@@ -327,7 +355,7 @@ final class WhisperStreamWake {
             .folding(options: [.diacriticInsensitive, .caseInsensitive], locale: Locale(identifier: "es_ES"))
             .lowercased()
             .replacingOccurrences(of: " ", with: "")
-        let candidates = ["veniron", "beniron", "venirion", "benirion", "venirron", "benirron", "venirom", "benirom", "venido", "benido"]
+        let candidates = ["veniron", "beniron", "venirion", "benirion", "venirron", "benirron", "venirom", "benirom"]
         return candidates.contains { folded.contains($0) }
     }
 }

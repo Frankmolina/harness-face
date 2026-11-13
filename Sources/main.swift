@@ -263,10 +263,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     private let wakeWord = WhisperStreamWake()
     private var view: MaskView?
     private var pendingDictation: DispatchWorkItem?
-    private var continuous = true
+    private var continuous = false
     private var listeningPaused = false
+    private var lastPasted = ""
+    private var lastPastedAt = Date.distantPast
     private let loginKey = "launchAtLogin"
     private let continuousKey = "continuousConversation"
+    private let handsFreeMigrationKey = "handsFreeApagado20261113"
     private let pausedKey = "listeningPaused"
     private let originXKey = "maskOriginX"
     private let originYKey = "maskOriginY"
@@ -275,7 +278,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         NSApp.setActivationPolicy(.accessory)
         createPanel()
         registerHotKey()
-        if !listeningPaused { wakeWord.start() }
+        if !listeningPaused && continuous { wakeWord.start() }
         configureLaunchAtLogin()
     }
 
@@ -318,7 +321,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         mask.onToggleContinuous = { [weak self] enabled in self?.setContinuous(enabled) }
         mask.onTogglePause = { [weak self] paused in self?.setListeningPaused(paused) }
         mask.launchAtLogin = UserDefaults.standard.bool(forKey: loginKey)
-        continuous = (UserDefaults.standard.object(forKey: continuousKey) as? Bool) ?? true
+        // 13 nov 2026: la conversación continua quedó apagada por defecto. Con el
+        // micrófono abierto siempre, whisper-stream oía la tele/YouTube y mandaba
+        // frases sueltas («¡Suscríbete!») a Harness como si las dijera Frank.
+        continuous = (UserDefaults.standard.object(forKey: continuousKey) as? Bool) ?? false
+        if continuous, !UserDefaults.standard.bool(forKey: handsFreeMigrationKey) {
+            continuous = false
+            UserDefaults.standard.set(false, forKey: continuousKey)
+        }
+        UserDefaults.standard.set(true, forKey: handsFreeMigrationKey)
         mask.continuous = continuous
         listeningPaused = UserDefaults.standard.bool(forKey: pausedKey)
         mask.paused = listeningPaused
@@ -332,9 +343,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             guard let self, !self.listeningPaused else { return }
             if self.continuous {
                 self.scheduleNextDictation()
-            } else {
-                self.wakeWord.resume()
             }
+            // Sin conversación continua el micrófono queda cerrado: solo Alt+V.
         }
         wakeWord.onWake = { [weak self] in
             guard let self, !self.listeningPaused else { return }
@@ -438,6 +448,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     }
 
     private func pasteIntoHarness(_ text: String) {
+        let clean = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !clean.isEmpty else { return }
+        // El micrófono puede devolver la misma frase dos veces (silencio + audio
+        // de fondo). Repetirla en el chat no aporta nada: se descarta.
+        if clean == lastPasted, Date().timeIntervalSince(lastPastedAt) < 90 {
+            NSLog("Harness Face: dictado repetido ignorado")
+            return
+        }
+        lastPasted = clean
+        lastPastedAt = Date()
         openHarness()
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
             let pasteboard = NSPasteboard.general
@@ -488,7 +508,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             pendingDictation = nil
             wakeWord.stop()
             if dictation.isRecording { dictation.stop() }
-        } else {
+        } else if continuous {
             wakeWord.resume()
         }
     }
@@ -503,7 +523,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         } else {
             pendingDictation?.cancel()
             pendingDictation = nil
-            wakeWord.resume()
+            wakeWord.stop()
         }
     }
 
