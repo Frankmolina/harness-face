@@ -26,6 +26,10 @@
 	<true/>
 	<key>NSHighResolutionCapable</key>
 	<true/>
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Harness Face usa el micrófono solo cuando pulsas Alt+V para dictar.</string>
+	<key>NSSpeechRecognitionUsageDescription</key>
+	<string>Harness Face transcribe tu dictado en español en el propio Mac.</string>
 	<key>NSHumanReadableCopyright</key>
 	<string>MIT · Frank Molina</string>
 </dict>

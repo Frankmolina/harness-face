@@ -7,7 +7,9 @@ private let harnessAppPath = "/Applications/DeepSeek Harness.app"
 final class MaskView: NSView {
     var onOpen: (() -> Void)?
     var onQuit: (() -> Void)?
+    var onDictate: (() -> Void)?
     private var hovered = false
+    private var listening = false
     private var tracking: NSTrackingArea?
 
     override var isFlipped: Bool { false }
@@ -16,8 +18,8 @@ final class MaskView: NSView {
         guard let context = NSGraphicsContext.current?.cgContext else { return }
         context.setShouldAntialias(true)
 
-        // Hover shrinks the mask a little without moving the always-on-top panel.
-        let inset: CGFloat = hovered ? 8 : 4
+        // Hover and listening shrink the mask without moving the always-on-top panel.
+        let inset: CGFloat = listening ? 12 : hovered ? 8 : 4
         let bounds = self.bounds.insetBy(dx: inset, dy: inset)
 
         // Electric blue halo behind the mask.
@@ -113,6 +115,11 @@ final class MaskView: NSView {
         goatee.fill()
     }
 
+    func setListening(_ value: Bool) {
+        listening = value
+        needsDisplay = true
+    }
+
     override func updateTrackingAreas() {
         super.updateTrackingAreas()
         if let tracking { removeTrackingArea(tracking) }
@@ -143,6 +150,7 @@ final class MaskView: NSView {
     override func rightMouseDown(with event: NSEvent) {
         let menu = NSMenu()
         menu.addItem(withTitle: "Abrir Harness", action: #selector(openAction), keyEquivalent: "")
+        menu.addItem(withTitle: "Dictar / detener", action: #selector(dictateAction), keyEquivalent: "")
         menu.addItem(.separator())
         menu.addItem(withTitle: "Salir de Harness Face", action: #selector(quitAction), keyEquivalent: "q")
         for item in menu.items { item.target = self }
@@ -151,6 +159,11 @@ final class MaskView: NSView {
 
     @objc private func openAction() {
         onOpen?()
+    }
+
+    @objc private func dictateAction() {
+        onOpen?()
+        onDictate?()
     }
 
     @objc private func quitAction() {
@@ -168,6 +181,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var hotKeyRef: EventHotKeyRef?
     private var eventHandlerRef: EventHandlerRef?
     private let hotKeySignature = OSType(0x48414E46) // "HANF"
+    private let dictation = Dictation()
+    private var view: MaskView?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
@@ -199,11 +214,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         mask.wantsLayer = true
         mask.onOpen = { [weak self] in self?.openHarness() }
         mask.onQuit = { NSApp.terminate(nil) }
+        mask.onDictate = { [weak self] in self?.dictation.toggle() }
+        dictation.onStateChange = { [weak self] listening in
+            self?.maskView?.setListening(listening)
+        }
+        dictation.onFinal = { [weak self] text in
+            self?.pasteIntoHarness(text)
+        }
         panel.contentView = mask
 
         panel.orderFrontRegardless()
         self.panel = panel
         self.maskView = mask
+        self.view = mask
     }
 
     private func registerHotKey() {
@@ -231,7 +254,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             { _, _, userData in
                 guard let userData else { return noErr }
                 let delegate = Unmanaged<AppDelegate>.fromOpaque(userData).takeUnretainedValue()
-                delegate.openHarness()
+                delegate.hotKeyPressed()
                 return noErr
             },
             1,
@@ -253,6 +276,33 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             if let error {
                 NSLog("Harness Face: no pude abrir Harness: %@", error.localizedDescription)
             }
+        }
+    }
+
+    @objc private func hotKeyPressed() {
+        openHarness()
+        // Leave enough time for Harness to take focus before dictating into it.
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) { [weak self] in
+            self?.dictation.toggle()
+        }
+    }
+
+    private func pasteIntoHarness(_ text: String) {
+        openHarness()
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.7) {
+            let pasteboard = NSPasteboard.general
+            pasteboard.clearContents()
+            pasteboard.setString(text, forType: .string)
+
+            // Command-V, without Return: the text stays in the chat for review.
+            guard let source = CGEventSource(stateID: .combinedSessionState),
+                  let down = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true),
+                  let up = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false)
+            else { return }
+            down.flags = .maskCommand
+            up.flags = .maskCommand
+            down.post(tap: .cghidEventTap)
+            up.post(tap: .cghidEventTap)
         }
     }
 
